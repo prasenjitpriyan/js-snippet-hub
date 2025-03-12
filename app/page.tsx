@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { client } from '@/sanity/lib/client'
 import SearchBar from '@/components/SearchBar'
 import SnippetList from '@/components/SnippetList'
 import SnippetModal from '@/components/SnippetModal'
+import Loading from '@/components/Loading'
 
 interface Snippet {
   _id: string
@@ -15,8 +16,8 @@ interface Snippet {
   createdAt: string
 }
 
-async function getSnippets(): Promise<Snippet[]> {
-  const query = `*[_type == "snippet"] | order(createdAt desc)`
+async function getSnippets(start: number, limit: number): Promise<Snippet[]> {
+  const query = `*[_type == "snippet"] | order(createdAt desc) [${start}...${start + limit}]`
   return await client.fetch(query)
 }
 
@@ -26,16 +27,22 @@ export default function HomePage() {
   const [filteredSnippets, setFilteredSnippets] = useState<Snippet[]>([])
   const [selectedSnippet, setSelectedSnippet] = useState<Snippet | null>(null)
   const [copied, setCopied] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [start, setStart] = useState(0)
+  const limit = 10
 
-  // Fetch snippets from Sanity
+  const observer = useRef<IntersectionObserver | null>(null)
+  const lastSnippetRef = useRef<HTMLDivElement | null>(null)
+
   useEffect(() => {
-    getSnippets().then((data) => {
+    getSnippets(0, limit).then((data) => {
       setSnippets(data)
-      setFilteredSnippets(data) // Initialize with all snippets
+      setFilteredSnippets(data)
+      setLoading(false)
     })
   }, [])
 
-  // Filter snippets based on search query
   useEffect(() => {
     if (!searchQuery.trim()) {
       setFilteredSnippets(snippets)
@@ -45,12 +52,49 @@ export default function HomePage() {
         snippets.filter(
           (snippet) =>
             snippet.title.toLowerCase().includes(lowerQuery) ||
-            snippet.description.toLowerCase().includes(lowerQuery) || // Ensure description is included in the search
+            snippet.description.toLowerCase().includes(lowerQuery) ||
             snippet.tags.some((tag) => tag.toLowerCase().includes(lowerQuery))
         )
       )
     }
   }, [searchQuery, snippets])
+
+  useEffect(() => {
+    if (loading || loadingMore) return
+
+    observer.current = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          loadMoreSnippets()
+        }
+      },
+      { threshold: 1.0 }
+    )
+
+    if (lastSnippetRef.current) {
+      observer.current.observe(lastSnippetRef.current)
+    }
+
+    return () => {
+      if (observer.current) observer.current.disconnect()
+    }
+  }, [snippets])
+
+  const loadMoreSnippets = () => {
+    setLoadingMore(true)
+    const newStart = start + limit
+
+    getSnippets(newStart, limit).then((data) => {
+      if (data.length > 0) {
+        setSnippets((prev) => [...prev, ...data])
+        setFilteredSnippets((prev) => [...prev, ...data])
+        setStart(newStart)
+      }
+      setLoadingMore(false)
+    })
+  }
+
+  if (loading) return <Loading />
 
   return (
     <main className="min-h-screen bg-gray-950 text-white px-6 py-12">
@@ -59,6 +103,8 @@ export default function HomePage() {
       </h1>
       <SearchBar searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
       <SnippetList snippets={filteredSnippets} onSelect={setSelectedSnippet} />
+      <div ref={lastSnippetRef} className="h-10" />
+      {loadingMore && <Loading />}
       {selectedSnippet && (
         <SnippetModal
           snippet={selectedSnippet}
